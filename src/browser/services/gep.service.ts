@@ -1,6 +1,9 @@
 import { app as electronApp } from 'electron';
 import { overwolf } from '@overwolf/ow-electron' // TODO: wil be @overwolf/ow-electron
 import EventEmitter from 'events';
+import { match } from 'assert';
+import { isStringObject } from 'util/types';
+import { get } from 'jquery';
 
 const app = electronApp as overwolf.OverwolfApp;
 
@@ -14,9 +17,48 @@ export class GameEventsService extends EventEmitter {
   private activeGame = 0;
   private gepGamesId: number[] = [];
 
+  // Deadlock gamestate
+  private lastHealth: number | null = null;
+  private inValidGame: boolean = false;
+  private inActiveGame: boolean = true;
+  private get inGame() {
+    return this.inValidGame && this.inActiveGame;
+  }
+
+  // PiShock WebSocket
+  private webSocket: WebSocket = new WebSocket("wss://broker.pishock.com/v2?url");
+  private getWebSocketCommand(mode: string, intensity: number, ms: number) {
+    //return JSON.stringify({ "Operation":"PING" });
+    return JSON.stringify({
+      "Operation": "PUBLISH",
+      "PublishCommands":
+      [{
+        "Target": "c{clientId}-ops", //for example c{clientId}-ops or c{clientId}-sops-{sharecode}
+        "Body": {
+          "id": "21203",
+          "m": mode, // 'v', 's', 'b', or 'e'
+          "i": intensity.toString(), // Could be vibIntensity, shockIntensity or a randomized value
+          "d": ms.toString(), // Calculated duration in milliseconds
+          "r": "true", // true or false, always set to true.
+          "l": {
+            //"u": "<userID>", // User ID from first step
+            "ty": "api", // 'sc' for ShareCode, 'api' for Normal
+            "w": "false", // true or false, if this is a warning vibrate, it affects the logs
+            "h": "false", // true if button is held or continuous is being sent.
+            "o": "Deadlock", // send to change the name shown in the logs.
+          }
+        }
+      }]
+    });
+  }
+
   constructor() {
     super();
     this.registerOverwolfPackageManager();
+    this.webSocket.onmessage = (event) => {
+      //const response = JSON.parse(data.toString());
+      console.log(event.data);
+    };
   }
 
 
@@ -130,11 +172,52 @@ export class GameEventsService extends EventEmitter {
     // When a new Info Update is fired
     this.gepApi.on('new-info-update', (e, gameId, ...args) => {
       this.emit('log', 'info-update', gameId, ...args);
+
+      args.forEach(arg => {
+
+        switch (arg.category) {
+
+          case ("game_info"):
+            switch (arg.key) {
+
+              case ("game_mode"):
+                let data = JSON.parse(arg.value);
+                this.inValidGame = data.game_mode == "Normal" || data.game_mode == "StreetBrawl";
+                break;
+              
+              case ("phase"):
+                this.inActiveGame = arg.value == "GameInProgress";
+                break;
+              
+            }
+            break;
+          
+          case ("match_info"):
+            if (arg.key.startsWith("roster")) {
+              let data = JSON.parse(arg.value);
+
+              // We only care about the local player
+              if (!data.is_local)
+                break;
+
+              if (data.health < this.lastHealth) {
+                if (this.inGame) {
+                  console.log("sending websocket command");
+                  this.webSocket.send(this.getWebSocketCommand("v", 50, 1000));
+                }
+              }
+
+              this.lastHealth = data.health;
+            }
+            break;
+          
+        }
+      });
     });
 
     // When a new Game Event is fired
     this.gepApi.on('new-game-event', (e, gameId, ...args) => {
-      this.emit('log', 'new-event', gameId, ...args);
+      //this.emit('log', 'new-event', gameId, ...args);
     });
 
     // If GEP encounters an error
