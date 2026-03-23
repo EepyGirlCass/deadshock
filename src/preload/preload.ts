@@ -24,12 +24,26 @@ contextBridge.exposeInMainWorld('gep', {
     });
   },
 
+  onGameEvents: (func) => {
+    ipcRenderer.on('game-events-message', (e, ...args) => {
+      func(...args);
+    });
+  },
+
   setRequiredFeature: () => {
     return ipcRenderer.invoke('gep-set-required-feature');
   },
 
   getInfo: () => {
     return ipcRenderer.invoke('gep-getInfo');
+  },
+
+  sendToPython: (payload) => {
+    return ipcRenderer.invoke('send-to-python', payload);
+  },
+
+  restartPython: () => {
+    return ipcRenderer.invoke('restart-python');
   },
 });
 

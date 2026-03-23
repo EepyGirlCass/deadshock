@@ -1,11 +1,10 @@
 {
-  "name": "ow-electron-packages-sample",
-  "version": "22.3.13",
-  "description": "ow-electron package sample app",
+  "name": "deadshock",
+  "version": "1.0.0",
+  "description": "Triggers PiShock devices based on Deadlock events",
   "main": "dist/browser/index.js",
   "author": {
-    "name": "overwolf",
-    "email": "overwolf@gmail.com"
+    "name": "SharkGirlCass"
   },
   "license": "MIT",
   "overwolf": {
@@ -16,12 +15,17 @@
   },
   "build": {
     "nodeGypRebuild": false,
-    "appId": "com.overwolf.packageSample",
+    "appId": "com.deadshock.app",
     "asar": true,
     "overwolf": {
-      "disableAdOptimization": false
+      "disableAdOptimization": true
     },
-    "productName": "owElectronpackageSample",
+    "extraResources": [{
+      "from": "dist/python/",
+      "to": "python/",
+      "filter": ["*.exe", "event_handler"]
+    }],
+    "productName": "DeadShock",
     "directories": {
       "output": "build"
     },
@@ -31,7 +35,7 @@
       "*.html",
       "*.exe"
     ],
-    "copyright": "Copyright 2023 Overwolf Ltd.",
+    "copyright": "",
     "win": {
       "target": [
         {
@@ -42,12 +46,14 @@
         }
       ],
       "artifactName": "${productName}-Setup-${version}.${ext}",
-      "publisherName": "Overwolf Ltd",
-      "legalTrademarks": "Copyright 2023 Overwolf Ltd."
+      "legalTrademarks": ""
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "uninstallDisplayName": "DeadShock",
+      "allowElevation": true,
+      "perMachine": true
     }
   },
   "scripts": {
@@ -57,7 +63,8 @@
     "build:dev": "webpack --watch --mode=development",
     "build:start": "npm run build && ow-electron . ",
     "start": "ow-electron .",
-    "build:ow-electron": "ow-electron-builder --c.extraMetadata.name=GameEventsTester --publish=never"
+    "build:python": "pyinstaller --onefile --distpath ./dist/python --name event_handler ./python/event_handler.py",
+    "build:ow-electron": "npm run build && npm run build:python && ow-electron-builder --c.extraMetadata.name=GameEventsTester --publish=never"
   },
   "devDependencies": {
     "@overwolf/ow-electron": "latest",

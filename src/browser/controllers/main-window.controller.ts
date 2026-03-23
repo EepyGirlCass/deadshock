@@ -28,6 +28,7 @@ export class MainWindowController {
     this.registerToIpc();
 
     gepService.on('log', this.printLogMessage.bind(this));
+    gepService.on('log-events', this.printGameEventsMessage.bind(this));
     overlayService.on('log', this.printLogMessage.bind(this));
 
     overlayHotkeysService.on('log', this.printLogMessage.bind(this));
@@ -54,6 +55,13 @@ export class MainWindowController {
       return;
     }
     this.browserWindow?.webContents?.send('console-message', message, ...args);
+  }
+
+  public printGameEventsMessage(message: String, ...args: any[]) {
+    if (this.browserWindow?.isDestroyed() ?? true) {
+      return;
+    }
+    this.browserWindow?.webContents?.send('game-events-message', message, ...args);
   }
 
   //----------------------------------------------------------------------------
@@ -141,6 +149,14 @@ export class MainWindowController {
         // native
         this.overlayInputService.mode = ExclusiveHotKeyMode.AutoRelease;
       }
+    });
+
+    ipcMain.handle('send-to-python', async (sender, payload) => {
+      this.gepService.sendToPython(payload);
+    });
+
+    ipcMain.handle('restart-python', async () => {
+      this.gepService.restartPython();
     });
 
   }

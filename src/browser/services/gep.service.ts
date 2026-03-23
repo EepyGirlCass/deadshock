@@ -1,9 +1,8 @@
 import { app as electronApp } from 'electron';
 import { overwolf } from '@overwolf/ow-electron' // TODO: wil be @overwolf/ow-electron
 import EventEmitter from 'events';
-import { match } from 'assert';
-import { isStringObject } from 'util/types';
-import { get } from 'jquery';
+import { spawn, ChildProcess } from 'child_process';
+import * as path from 'path';
 
 const app = electronApp as overwolf.OverwolfApp;
 
@@ -21,45 +20,68 @@ export class GameEventsService extends EventEmitter {
   private lastHealth: number | null = null;
   private inValidGame: boolean = false;
   private inActiveGame: boolean = true;
-  private get inGame() {
-    return this.inValidGame && this.inActiveGame;
-  }
+  private get inGame() {return this.inValidGame && this.inActiveGame;}
 
-  // PiShock WebSocket
-  private webSocket: WebSocket = new WebSocket("wss://broker.pishock.com/v2?url");
-  private getWebSocketCommand(mode: string, intensity: number, ms: number) {
-    //return JSON.stringify({ "Operation":"PING" });
-    return JSON.stringify({
-      "Operation": "PUBLISH",
-      "PublishCommands":
-      [{
-        "Target": "c{clientId}-ops", //for example c{clientId}-ops or c{clientId}-sops-{sharecode}
-        "Body": {
-          "id": "21203",
-          "m": mode, // 'v', 's', 'b', or 'e'
-          "i": intensity.toString(), // Could be vibIntensity, shockIntensity or a randomized value
-          "d": ms.toString(), // Calculated duration in milliseconds
-          "r": "true", // true or false, always set to true.
-          "l": {
-            //"u": "<userID>", // User ID from first step
-            "ty": "api", // 'sc' for ShareCode, 'api' for Normal
-            "w": "false", // true or false, if this is a warning vibrate, it affects the logs
-            "h": "false", // true if button is held or continuous is being sent.
-            "o": "Deadlock", // send to change the name shown in the logs.
-          }
-        }
-      }]
-    });
-  }
 
   constructor() {
     super();
     this.registerOverwolfPackageManager();
-    this.webSocket.onmessage = (event) => {
-      //const response = JSON.parse(data.toString());
-      console.log(event.data);
-    };
+    this.startPython();
   }
+
+  // Python subprocess
+  // --------------------------------------------------
+  private pyProcess: ChildProcess | null = null;
+
+  private startPython() {
+    const { cmd, args } = electronApp.isPackaged
+      ? {
+          cmd: path.join(process.resourcesPath, 'python',
+            process.platform === 'win32' ? 'event_handler.exe' : 'event_handler'),
+          args: [] as string[]
+        }
+      : {
+          cmd: 'python',
+          args: [path.join(electronApp.getAppPath(), 'python', 'event_handler.py')]
+        };
+
+    this.pyProcess = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+
+    this.pyProcess.stdout?.on('data', (d: Buffer) =>
+      d.toString().split('\n').filter(Boolean).forEach(line => {
+        try { this.emit('log', '[python]', JSON.parse(line)); }
+        catch { this.emit('log', '[python raw]', line); }
+      })
+    );
+
+    this.pyProcess.stderr?.on('data', (d: Buffer) =>
+      console.error('[python err]', d.toString())
+    );
+
+    this.pyProcess.on('close', code => {
+      this.emit('log', '[python] exited', code);
+      this.pyProcess = null;
+      // Automatically restart Python after a short delay
+      setTimeout(() => this.restartPython(), 1000);
+    });
+  }
+
+  public sendToPython(payload: object) {
+    this.pyProcess?.stdin?.write(JSON.stringify(payload) + '\n');
+  }
+
+  public restartPython() {
+    // Kill existing process if any
+    if (this.pyProcess) {
+      this.pyProcess.kill();
+      this.pyProcess = null;
+    }
+    // Start new process
+    this.emit('log', '[python] restarting...');
+    this.startPython();
+  }
+
+  // --------------------------------------------------
 
 
   /**
@@ -171,53 +193,14 @@ export class GameEventsService extends EventEmitter {
 
     // When a new Info Update is fired
     this.gepApi.on('new-info-update', (e, gameId, ...args) => {
-      this.emit('log', 'info-update', gameId, ...args);
-
-      args.forEach(arg => {
-
-        switch (arg.category) {
-
-          case ("game_info"):
-            switch (arg.key) {
-
-              case ("game_mode"):
-                let data = JSON.parse(arg.value);
-                this.inValidGame = data.game_mode == "Normal" || data.game_mode == "StreetBrawl";
-                break;
-              
-              case ("phase"):
-                this.inActiveGame = arg.value == "GameInProgress";
-                break;
-              
-            }
-            break;
-          
-          case ("match_info"):
-            if (arg.key.startsWith("roster")) {
-              let data = JSON.parse(arg.value);
-
-              // We only care about the local player
-              if (!data.is_local)
-                break;
-
-              if (data.health < this.lastHealth) {
-                if (this.inGame) {
-                  console.log("sending websocket command");
-                  this.webSocket.send(this.getWebSocketCommand("v", 50, 1000));
-                }
-              }
-
-              this.lastHealth = data.health;
-            }
-            break;
-          
-        }
-      });
+      this.emit('log-events', 'info-update', gameId, ...args);
+      args.forEach(arg => {this.sendToPython({ "type" : "info_update", "data" : arg })});
     });
 
     // When a new Game Event is fired
     this.gepApi.on('new-game-event', (e, gameId, ...args) => {
-      //this.emit('log', 'new-event', gameId, ...args);
+      this.emit('log-events', 'new-event', gameId, ...args);
+      args.forEach(arg => {this.sendToPython({ "type" : "game_event", "data" : arg })});
     });
 
     // If GEP encounters an error
